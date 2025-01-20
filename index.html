@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
+import requests
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///room_finder.db'
@@ -15,17 +16,45 @@ class User(db.Model):
 class RoomDetails(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     owner_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    location = db.Column(db.String(100), nullable=False)
+    district = db.Column(db.String(100), nullable=False)
+    place_name = db.Column(db.String(100), nullable=False)
+    road_access = db.Column(db.String(50), nullable=False)
+    parking_facility = db.Column(db.Boolean, default=False)
+    water_service = db.Column(db.Boolean, default=False)
     price = db.Column(db.Float, nullable=False)
-    room_type = db.Column(db.String(50), nullable=False)  # e.g., '1BHK', '2BHK'
-    description = db.Column(db.Text, nullable=True)
-
-class FinderPreferences(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    finder_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    location = db.Column(db.String(100), nullable=False)
-    budget = db.Column(db.Float, nullable=False)
     room_type = db.Column(db.String(50), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    photo_url = db.Column(db.String(255), nullable=True)
+    latitude = db.Column(db.Float, nullable=True)
+    longitude = db.Column(db.Float, nullable=True)
+
+class Payment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    amount = db.Column(db.Float, nullable=False)
+    payment_method = db.Column(db.String(50), nullable=False)
+    status = db.Column(db.String(20), default='Pending')
+
+class CustomOffer(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    offer_type = db.Column(db.String(10), nullable=False)  # 'finder' or 'owner'
+    description = db.Column(db.Text, nullable=False)
+
+NEPAL_DISTRICTS = [
+    "Achham", "Arghakhanchi", "Baglung", "Baitadi", "Bajhang", "Bajura", "Banke", "Bara", "Bardiya", "Bhaktapur", 
+    "Bhojpur", "Chitwan", "Dadeldhura", "Dailekh", "Dang", "Darchula", "Dhading", "Dhankuta", "Dhanusha", "Dolakha", 
+    "Dolpa", "Doti", "Eastern Rukum", "Gorkha", "Gulmi", "Humla", "Ilam", "Jajarkot", "Jhapa", "Jumla", "Kailali", 
+    "Kalikot", "Kanchanpur", "Kapilvastu", "Kaski", "Kathmandu", "Kavrepalanchok", "Khotang", "Lalitpur", "Lamjung", 
+    "Mahottari", "Makwanpur", "Manang", "Morang", "Mugu", "Mustang", "Myagdi", "Nawalpur", "Nuwakot", "Okhaldhunga", 
+    "Palpa", "Panchthar", "Parasi", "Parbat", "Parsa", "Pyuthan", "Ramechhap", "Rasuwa", "Rautahat", "Rolpa", 
+    "Rupandehi", "Salyan", "Sankhuwasabha", "Saptari", "Sarlahi", "Sindhuli", "Sindhupalchok", "Siraha", "Solukhumbu", 
+    "Sunsari", "Surkhet", "Syangja", "Tanahun", "Taplejung", "Tehrathum", "Udayapur", "Western Rukum"
+]
+
+@app.route('/districts', methods=['GET'])
+def get_districts():
+    return jsonify({"districts": NEPAL_DISTRICTS})
 
 @app.route('/register', methods=['POST'])
 def register_user():
@@ -46,67 +75,128 @@ def register_user():
 def add_room():
     data = request.json
     owner_id = data.get('owner_id')
-    location = data.get('location')
+    district = data.get('district')
+    place_name = data.get('place_name')
+    road_access = data.get('road_access')
+    parking_facility = data.get('parking_facility', False)
+    water_service = data.get('water_service', False)
     price = data.get('price')
     room_type = data.get('room_type')
     description = data.get('description', '')
+    photo_url = data.get('photo_url', '')
+    latitude = data.get('latitude')
+    longitude = data.get('longitude')
+
+    if district not in NEPAL_DISTRICTS:
+        return jsonify({"error": "Invalid district."}), 400
 
     owner = User.query.get(owner_id)
     if not owner or owner.user_type != 'owner':
         return jsonify({"error": "Invalid owner ID."}), 400
 
-    room = RoomDetails(owner_id=owner_id, location=location, price=price, room_type=room_type, description=description)
+    room = RoomDetails(
+        owner_id=owner_id, district=district, place_name=place_name, road_access=road_access,
+        parking_facility=parking_facility, water_service=water_service, price=price,
+        room_type=room_type, description=description, photo_url=photo_url, latitude=latitude,
+        longitude=longitude
+    )
     db.session.add(room)
     db.session.commit()
 
     return jsonify({"message": "Room added successfully.", "room_id": room.id})
 
-@app.route('/set_preferences', methods=['POST'])
-def set_preferences():
+@app.route('/pay', methods=['POST'])
+def process_payment():
     data = request.json
-    finder_id = data.get('finder_id')
-    location = data.get('location')
-    budget = data.get('budget')
-    room_type = data.get('room_type')
+    user_id = data.get('user_id')
+    amount = data.get('amount', 350)
+    payment_method = data.get('payment_method')
 
-    finder = User.query.get(finder_id)
-    if not finder or finder.user_type != 'finder':
-        return jsonify({"error": "Invalid finder ID."}), 400
+    if payment_method not in ['eSewa', 'Khalti', 'IME Pay']:
+        return jsonify({"error": "Invalid payment method."}), 400
 
-    preferences = FinderPreferences(finder_id=finder_id, location=location, budget=budget, room_type=room_type)
-    db.session.add(preferences)
+    # Simulate payment using predefined number (e.g., 9851258678)
+    payment = Payment(user_id=user_id, amount=amount, payment_method=payment_method, status='Completed')
+    db.session.add(payment)
     db.session.commit()
 
-    return jsonify({"message": "Preferences set successfully.", "preferences_id": preferences.id})
+    return jsonify({"message": "Payment processed successfully.", "payment_id": payment.id})
 
 @app.route('/search_rooms', methods=['GET'])
 def search_rooms():
-    finder_id = request.args.get('finder_id')
-    finder = User.query.get(finder_id)
-    if not finder or finder.user_type != 'finder':
-        return jsonify({"error": "Invalid finder ID."}), 400
-
-    preferences = FinderPreferences.query.filter_by(finder_id=finder_id).first()
-    if not preferences:
-        return jsonify({"error": "Preferences not set for this finder."}), 400
+    district = request.args.get('district')
+    price = request.args.get('price', type=float)
+    room_type = request.args.get('room_type')
 
     rooms = RoomDetails.query.filter(
-        RoomDetails.location == preferences.location,
-        RoomDetails.price <= preferences.budget,
-        RoomDetails.room_type == preferences.room_type
+        RoomDetails.district == district,
+        RoomDetails.price <= price,
+        RoomDetails.room_type == room_type
     ).all()
 
     room_list = [{
         "room_id": room.id,
-        "location": room.location,
+        "district": room.district,
+        "place_name": room.place_name,
+        "road_access": room.road_access,
+        "parking_facility": room.parking_facility,
+        "water_service": room.water_service,
         "price": room.price,
         "room_type": room.room_type,
-        "description": room.description
+        "description": room.description,
+        "photo_url": room.photo_url,
+        "latitude": room.latitude,
+        "longitude": room.longitude
     } for room in rooms]
 
     return jsonify({"rooms": room_list})
 
+@app.route('/get_contact', methods=['POST'])
+def get_contact():
+    data = request.json
+    user_id = data.get('user_id')
+    room_id = data.get('room_id')
+
+    payment = Payment.query.filter_by(user_id=user_id, status='Completed').first()
+    if not payment:
+        return jsonify({"error": "Payment required to access contact information."}), 403
+
+    room = RoomDetails.query.get(room_id)
+    if not room:
+        return jsonify({"error": "Room not found."}), 404
+
+    owner = User.query.get(room.owner_id)
+    return jsonify({"owner_contact": owner.username})
+
+@app.route('/add_offer', methods=['POST'])
+def add_offer():
+    data = request.json
+    user_id = data.get('user_id')
+    offer_type = data.get('offer_type')  # 'finder' or 'owner'
+    description = data.get('description')
+
+    if offer_type not in ['finder', 'owner']:
+        return jsonify({"error": "Invalid offer type."}), 400
+
+    offer = CustomOffer(user_id=user_id, offer_type=offer_type, description=description)
+    db.session.add(offer)
+    db.session.commit()
+
+    return jsonify({"message": "Offer added successfully.", "offer_id": offer.id})
+
+@app.route('/view_offers', methods=['GET'])
+def view_offers():
+    offers = CustomOffer.query.all()
+
+    offer_list = [{
+        "offer_id": offer.id,
+        "user_id": offer.user_id,
+        "offer_type": offer.offer_type,
+        "description": offer.description
+    } for offer in offers]
+
+    return jsonify({"offers": offer_list})
+
 if __name__ == '__main__':
     db.create_all()
     app.run(debug=True)
-
