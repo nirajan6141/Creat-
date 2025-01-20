@@ -1,111 +1,113 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Room Finder</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
-</head>
-<body>
-  <div class="container my-5">
-    <h1 class="text-center mb-4">Room Finder Software</h1>
-    
-    <!-- Search Section -->
-    <div class="mb-4">
-      <input type="text" id="search" class="form-control" placeholder="Search for a room...">
-    </div>
+from flask import Flask, request, jsonify
+from flask_sqlalchemy import SQLAlchemy
 
-    <!-- Add Room Form -->
-    <form id="room-form" class="mb-4">
-      <div class="row g-3">
-        <div class="col-md-4">
-          <input type="text" id="room-name" class="form-control" placeholder="Room Name" required>
-        </div>
-        <div class="col-md-4">
-          <input type="number" id="room-price" class="form-control" placeholder="Price" required>
-        </div>
-        <div class="col-md-4">
-          <button type="submit" class="btn btn-primary w-100">Add Room</button>
-        </div>
-      </div>
-    </form>
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///room_finder.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-    <!-- Room List -->
-    <table class="table table-bordered">
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>Room Name</th>
-          <th>Price</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody id="room-list">
-        <!-- Dynamic Content -->
-      </tbody>
-    </table>
-  </div>
+db = SQLAlchemy(app)
 
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="script.js"></script>
-</body>
-</html>body {
-  background-color: #f8f9fa;
-}
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), nullable=False)
+    user_type = db.Column(db.String(10), nullable=False)  # 'finder' or 'owner'
 
-h1 {
-  font-family: 'Arial', sans-serif;
-  font-weight: bold;
-  color: #007bff;
-}
+class RoomDetails(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    owner_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    location = db.Column(db.String(100), nullable=False)
+    price = db.Column(db.Float, nullable=False)
+    room_type = db.Column(db.String(50), nullable=False)  # e.g., '1BHK', '2BHK'
+    description = db.Column(db.Text, nullable=True)
 
-.table {
-  background: #ffffff;
-}
+class FinderPreferences(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    finder_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    location = db.Column(db.String(100), nullable=False)
+    budget = db.Column(db.Float, nullable=False)
+    room_type = db.Column(db.String(50), nullable=False)
 
-#room-form input, #search {
-  border-radius: 8px;
-}// Room Data (Mock Database)
-let rooms = [];
+@app.route('/register', methods=['POST'])
+def register_user():
+    data = request.json
+    username = data.get('username')
+    user_type = data.get('user_type')
 
-// Selectors
-const roomForm = document.getElementById('room-form');
-const roomList = document.getElementById('room-list');
-const searchInput = document.getElementById('search');
+    if user_type not in ['finder', 'owner']:
+        return jsonify({"error": "Invalid user type."}), 400
 
-// Render Rooms
-function renderRooms(filter = '') {
-  roomList.innerHTML = '';
-  rooms
-    .filter(room => room.name.toLowerCase().includes(filter.toLowerCase()))
-    .forEach((room, index) => {
-      roomList.innerHTML += `
-        <tr>
-          <td>${index + 1}</td>
-          <td>${room.name}</td>
-          <td>$${room.price}</td>
-          <td>
-            <button class="btn btn-warning btn-sm" onclick="editRoom(${index})">Edit</button>
-            <button class="btn btn-danger btn-sm" onclick="deleteRoom(${index})">Delete</button>
-          </td>
-        </tr>
-      `;
-    });
-}
+    user = User(username=username, user_type=user_type)
+    db.session.add(user)
+    db.session.commit()
 
-// Add Room
-roomForm.addEventListener('submit', e => {
-  e.preventDefault();
-  const roomName = document.getElementById('room-name').value;
-  const roomPrice = document.getElementById('room-price').value;
+    return jsonify({"message": "User registered successfully.", "user_id": user.id})
 
-  rooms.push({ name: roomName, price: roomPrice });
-  roomForm.reset();
-  renderRooms();
-});
+@app.route('/add_room', methods=['POST'])
+def add_room():
+    data = request.json
+    owner_id = data.get('owner_id')
+    location = data.get('location')
+    price = data.get('price')
+    room_type = data.get('room_type')
+    description = data.get('description', '')
 
-// Edit Room
-function editRoom(index) {
-  const room = rooms[index];
-  const
+    owner = User.query.get(owner_id)
+    if not owner or owner.user_type != 'owner':
+        return jsonify({"error": "Invalid owner ID."}), 400
+
+    room = RoomDetails(owner_id=owner_id, location=location, price=price, room_type=room_type, description=description)
+    db.session.add(room)
+    db.session.commit()
+
+    return jsonify({"message": "Room added successfully.", "room_id": room.id})
+
+@app.route('/set_preferences', methods=['POST'])
+def set_preferences():
+    data = request.json
+    finder_id = data.get('finder_id')
+    location = data.get('location')
+    budget = data.get('budget')
+    room_type = data.get('room_type')
+
+    finder = User.query.get(finder_id)
+    if not finder or finder.user_type != 'finder':
+        return jsonify({"error": "Invalid finder ID."}), 400
+
+    preferences = FinderPreferences(finder_id=finder_id, location=location, budget=budget, room_type=room_type)
+    db.session.add(preferences)
+    db.session.commit()
+
+    return jsonify({"message": "Preferences set successfully.", "preferences_id": preferences.id})
+
+@app.route('/search_rooms', methods=['GET'])
+def search_rooms():
+    finder_id = request.args.get('finder_id')
+    finder = User.query.get(finder_id)
+    if not finder or finder.user_type != 'finder':
+        return jsonify({"error": "Invalid finder ID."}), 400
+
+    preferences = FinderPreferences.query.filter_by(finder_id=finder_id).first()
+    if not preferences:
+        return jsonify({"error": "Preferences not set for this finder."}), 400
+
+    rooms = RoomDetails.query.filter(
+        RoomDetails.location == preferences.location,
+        RoomDetails.price <= preferences.budget,
+        RoomDetails.room_type == preferences.room_type
+    ).all()
+
+    room_list = [{
+        "room_id": room.id,
+        "location": room.location,
+        "price": room.price,
+        "room_type": room.room_type,
+        "description": room.description
+    } for room in rooms]
+
+    return jsonify({"rooms": room_list})
+
+if __name__ == '__main__':
+    db.create_all()
+    app.run(debug=True)
+
+
